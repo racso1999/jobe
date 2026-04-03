@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jobe – Gmail Reader</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f5f5f5;
+      --text: #1a1a1a;
+      --text-muted: #555;
+      --text-muted-2: #777;
+      --panel: #ffffff;
+      --line: #ddd;
+      --soft-bg: #f0f0f0;
+      --soft-bg-hover: #e0e0e0;
+      --soft-text: #555;
+      --shadow: 0 2px 16px rgba(0,0,0,.1);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1115;
+        --text: #e6e6e6;
+        --text-muted: #b0b6c0;
+        --text-muted-2: #9aa3af;
+        --panel: #171a21;
+        --line: #2b3240;
+        --soft-bg: #242b38;
+        --soft-bg-hover: #2d3645;
+        --soft-text: #d1d7e0;
+        --shadow: 0 2px 16px rgba(0,0,0,.35);
+      }
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      color: var(--text);
+    }
+    .card {
+      background: var(--panel);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 48px 40px;
+      text-align: center;
+      max-width: 400px;
+      width: 100%;
+    }
+    h1 { font-size: 1.8rem; margin-bottom: 8px; }
+    p  { color: var(--text-muted); margin-bottom: 32px; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 24px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 500;
+      text-decoration: none;
+      transition: opacity .15s;
+    }
+    .btn:hover { opacity: .85; }
+    .btn-google {
+      background: #4285F4;
+      color: #fff;
+    }
+    .btn-outline {
+      background: var(--panel);
+      color: var(--soft-text);
+      border: 1px solid var(--line);
+      margin-top: 12px;
+    }
+    .avatar {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      object-fit: cover;
+      margin-bottom: 16px;
+    }
+    .user-name { font-size: 1.2rem; font-weight: 600; margin-bottom: 4px; }
+    .user-email { color: var(--text-muted-2); margin-bottom: 28px; font-size: .9rem; }
+    .actions { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .nav-links { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+    .nav-links a { padding: 10px 20px; background: var(--soft-bg); color: var(--soft-text); border-radius: 6px; text-decoration: none; font-size: .95rem; transition: background .15s; }
+    .nav-links a:hover { background: var(--soft-bg-hover); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    {% if user %}
+      {% if user.picture %}
+        <img class="avatar" src="{{ user.picture }}" alt="Profile picture" referrerpolicy="no-referrer" />
+      {% endif %}
+      <div class="user-name">{{ user.name }}</div>
+      <div class="user-email">{{ user.email }}</div>
+      <div class="nav-links">
+        <a href="/emails">View Inbox</a>
+        <a href="/jobs">Job Applications</a>
+      </div>
+      <div class="actions">
+        <a class="btn btn-outline" href="/auth/logout">Sign out</a>
+      </div>
+    {% else %}
+      <h1>Jobe</h1>
+      <p>Sign in with Google to read your Gmail inbox.</p>
+      <a class="btn btn-google" href="/auth/login">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#fff" fill-opacity=".9"/>
+          <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#fff" fill-opacity=".7"/>
+          <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#fff" fill-opacity=".6"/>
+          <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#fff" fill-opacity=".8"/>
+        </svg>
+        Sign in with Google
+      </a>
+    {% endif %}
+  </div>
+</body>
+</html>
