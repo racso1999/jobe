@@ -40,14 +40,14 @@
         --row-line: rgba(255,255,255,0.10);
         --row-hover: rgba(255,255,255,0.04);
         --outline: rgba(255,255,255,0.18);
-        --chip-bg: rgba(22,25,33,0.82);
+        --chip-bg: rgba(20,20,20,0.82);
         --st-awaiting: #fbbf24;
         --st-interview: #60a5fa;
         --st-assessment: #a5b4fc;
         --st-offer: #4ade80;
         --st-rejected: #f87171;
         --st-other: #9ca3af;
-        --page-bg: #0d0f14;
+        --page-bg: #000000;
       }
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -125,7 +125,7 @@
     .edit-field input, .edit-field select {
       font-family: inherit; font-size: .92rem; color: var(--text);
       background: var(--chip-bg); border: 1px solid var(--outline); border-radius: 6px;
-      padding: 8px 10px; max-width: 380px;
+      padding: 8px 10px; width: 100%; max-width: 380px; height: 38px;
     }
     .save-btn {
       font-family: inherit; font-size: .85rem; font-weight: 600; cursor: pointer;
