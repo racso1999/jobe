@@ -259,6 +259,7 @@ async def edit_job(
         job.job_title = new_title
         job.status = new_status
         job.updated_at = datetime.utcnow()
+        job.unread = False  # user made this change, so it's already "seen"
 
         changes = []
         if new_status != old_status:
@@ -285,6 +286,27 @@ async def edit_job(
         db.close()
 
     return RedirectResponse("/jobs", status_code=303)
+
+
+@app.post("/job/{job_id}/seen")
+async def mark_seen(job_id: int, request: Request):
+    """Clear a job's unread flag once the user opens it (removes the bell)."""
+    user = request.session.get("user")
+    if not user:
+        return JSONResponse({"ok": False}, status_code=401)
+    db = SessionLocal()
+    try:
+        job = (
+            db.query(JobApplication)
+            .filter(JobApplication.id == job_id, JobApplication.user_email == user["email"])
+            .first()
+        )
+        if job is not None and job.unread:
+            job.unread = False
+            db.commit()
+    finally:
+        db.close()
+    return JSONResponse({"ok": True})
 
 
 @app.get("/scan-status")
@@ -358,14 +380,15 @@ async def jobs(request: Request):
                 "company": job.company,
                 "job_title": job.job_title,
                 "status": job.status,
-                "date": (job.applied_date or job.created_at).strftime("%Y-%m-%d")
+                "unread": bool(job.unread),
+                "date": (job.applied_date or job.created_at).strftime("%d-%m-%Y")
                 if (job.applied_date or job.created_at)
                 else "",
                 "emails": [
                     {
                         "subject": e.subject or "(no subject)",
                         "paraphrase": e.paraphrase or "",
-                        "date": e.received_at.strftime("%Y-%m-%d") if e.received_at else "",
+                        "date": e.received_at.strftime("%d-%m-%Y") if e.received_at else "",
                         "mail_url": _mail_url(e.message_ref),
                     }
                     for e in emails

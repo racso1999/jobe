@@ -28,6 +28,7 @@ class JobApplication(Base):
     email_subject = Column(String)
     email_body = Column(Text, nullable=True)
     applied_date = Column(DateTime, nullable=True)
+    unread = Column(Boolean, default=False)  # new email / status change not yet viewed
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

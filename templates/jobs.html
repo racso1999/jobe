@@ -135,6 +135,7 @@
     .save-btn:hover { opacity: .88; }
     .company-col { font-weight: 600; color: var(--text); }
     .title-col { color: var(--text-soft); }
+    .bell { display: inline-flex; margin-left: 6px; color: #eab308; vertical-align: -2px; }
     .status-col { font-size: .9rem; font-weight: 600; letter-spacing: .2px; }
     .status-awaiting { color: var(--st-awaiting); }
     .status-interview { color: var(--st-interview); }
@@ -176,10 +177,10 @@
     {% if jobs %}
       <div class="jobs">
         {% for job in jobs %}
-          <details class="job">
+          <details class="job" data-job-id="{{ job.id }}">
             <summary class="job-row">
               <span class="company-col">{{ job.company }}</span>
-              <span class="title-col">{{ job.job_title }}</span>
+              <span class="title-col">{{ job.job_title }}{% if job.unread %} <span class="bell" title="New activity"><svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" aria-hidden="true"><path d="M12 2a6 6 0 0 0-6 6c0 3.6-1.1 4.7-1.8 5.3A1 1 0 0 0 5 15h14a1 1 0 0 0 .8-1.7C19.1 12.7 18 11.6 18 8a6 6 0 0 0-6-6Zm0 20a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Z"/></svg></span>{% endif %}</span>
               {% set status_lower = job.status.lower() %}
               {% if "awaiting" in status_lower %}
                 <span class="status-col status-awaiting">{{ job.status }}</span>
@@ -284,6 +285,18 @@
       setInterval(poll, 1500);
       poll();
     })();
+
+    // Opening a job with new activity clears its bell (marks it seen).
+    document.querySelectorAll("details.job").forEach(function (d) {
+      d.addEventListener("toggle", function () {
+        if (!d.open) return;
+        var bell = d.querySelector(".bell");
+        if (!bell) return;
+        fetch("/job/" + d.getAttribute("data-job-id") + "/seen", { method: "POST" })
+          .catch(function () {});
+        bell.remove();
+      });
+    });
   </script>
 </body>
 </html>

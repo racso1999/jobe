@@ -296,6 +296,7 @@ def scan_account(db: Session, account: UserAccount) -> dict:
                 db.add(job)
                 stats["new_jobs"] += 1
 
+            job.unread = True  # flag for the dashboard bell until the user views it
             db.flush()  # ensure job.id is available for the JobEmail link
 
             # When the email was received (Gmail internalDate is ms since epoch).
