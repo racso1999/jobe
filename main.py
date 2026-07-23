@@ -1,20 +1,24 @@
 import os
 import secrets
-import base64
-import re
+import urllib.parse
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from google.auth.transport.requests import Request as GoogleRequest
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from starlette.middleware.sessions import SessionMiddleware
-from database import init_db, SessionLocal, JobApplication
-from gemini_parser import analyze_job_application_with_gemini
+from apscheduler.schedulers.background import BackgroundScheduler
+
+from database import (
+    init_db, SessionLocal, JobApplication, JobEmail, ProcessedEmail,
+    UserAccount, upsert_account,
+)
+from scanner import scan_account
+import scan_status
 
 load_dotenv()
 
@@ -32,6 +36,8 @@ if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
 
 REDIRECT_URI = os.environ.get("REDIRECT_URI", "http://localhost:8000/auth/callback")
 
+SCAN_INTERVAL_MINUTES = float(os.environ.get("SCAN_INTERVAL_MINUTES", "1"))
+
 SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -39,12 +45,76 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
 ]
 
-app = FastAPI()
+scheduler = BackgroundScheduler()
+
+
+def scan_all_accounts():
+    """Background job: incrementally scan every persisted account's inbox."""
+    db = SessionLocal()
+    try:
+        accounts = db.query(UserAccount).filter(UserAccount.refresh_token.isnot(None)).all()
+        for account in accounts:
+            try:
+                stats = scan_account(db, account)
+                print(f"[scan] {account.email}: {stats}")
+            except Exception as e:  # keep scanning other accounts on failure
+                db.rollback()
+                print(f"[scan] error for {account.email}: {e}")
+    finally:
+        db.close()
+        scan_status.clear_status()
+
+
+def scan_one_account(email: str):
+    """One-off scan for a single account (triggered right after login)."""
+    db = SessionLocal()
+    try:
+        account = db.query(UserAccount).filter(UserAccount.email == email).first()
+        if account is None:
+            return
+        try:
+            stats = scan_account(db, account)
+            print(f"[scan:onboard] {account.email}: {stats}")
+        except Exception as e:
+            db.rollback()
+            print(f"[scan:onboard] error for {account.email}: {e}")
+    finally:
+        db.close()
+        scan_status.clear_status()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    scheduler.add_job(
+        scan_all_accounts,
+        "interval",
+        minutes=SCAN_INTERVAL_MINUTES,
+        id="scan_all_accounts",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=86400)
 templates = Jinja2Templates(directory="templates")
 
-# Initialize database on startup
-init_db()
+
+def _mail_url(message_ref: str) -> str:
+    """Build a macOS Mail deep link (message:// scheme) from an RFC-822 Message-ID.
+
+    Opens the message directly in Mail.app when the account is configured there.
+    """
+    ref = (message_ref or "").strip().strip("<>")
+    if not ref:
+        return ""
+    return "message://%3C" + urllib.parse.quote(ref, safe="") + "%3E"
 
 
 def _build_flow() -> Flow:
@@ -61,60 +131,6 @@ def _build_flow() -> Flow:
         scopes=SCOPES,
         redirect_uri=REDIRECT_URI,
     )
-
-
-def _credentials_from_session(data: dict) -> Credentials:
-    return Credentials(
-        token=data["token"],
-        refresh_token=data.get("refresh_token"),
-        token_uri=data["token_uri"],
-        client_id=data["client_id"],
-        client_secret=data["client_secret"],
-        scopes=data["scopes"],
-    )
-
-
-def _decode_base64url(data: str) -> str:
-    if not data:
-        return ""
-    padding = "=" * (-len(data) % 4)
-    try:
-        return base64.urlsafe_b64decode(data + padding).decode("utf-8", errors="ignore")
-    except Exception:
-        return ""
-
-
-def _extract_email_body(payload: dict) -> str:
-    """Extract combined text body content from all payload parts."""
-    if not payload:
-        return ""
-
-    fragments: list[str] = []
-    mime_type = payload.get("mimeType", "")
-    body_data = payload.get("body", {}).get("data")
-    if body_data and mime_type in {"text/plain", "text/html"}:
-        text = _decode_base64url(body_data)
-        if mime_type == "text/html":
-            text = re.sub(r"<[^>]+>", " ", text)
-        normalized = " ".join(text.split())
-        if normalized:
-            fragments.append(normalized)
-
-    for part in payload.get("parts", []):
-        part_text = _extract_email_body(part)
-        if part_text:
-            fragments.append(part_text)
-
-    return "\n\n".join(fragments)
-
-
-def _fallback_company(from_email: str) -> str:
-    match = re.search(r"@([A-Za-z0-9.-]+)", from_email or "")
-    if not match:
-        return "Unknown Company"
-    domain = match.group(1).lower()
-    parts = [p for p in domain.split(".") if p and p not in {"com", "co", "org", "net", "io", "ai"}]
-    return parts[-1].capitalize() if parts else "Unknown Company"
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +195,7 @@ async def callback(
     user_info_svc = build("oauth2", "v2", credentials=credentials)
     user_info = user_info_svc.userinfo().get().execute()
 
-    request.session["credentials"] = {
+    creds_dict = {
         "token": credentials.token,
         "refresh_token": credentials.refresh_token,
         "token_uri": credentials.token_uri,
@@ -193,7 +209,88 @@ async def callback(
         "picture": user_info.get("picture"),
     }
 
+    # Persist credentials so the background scanner can run without a session,
+    # then kick off an immediate scan so a new user sees results quickly.
+    email = user_info.get("email")
+    if email:
+        db = SessionLocal()
+        try:
+            upsert_account(
+                db,
+                email=email,
+                credentials=creds_dict,
+                name=user_info.get("name"),
+                picture=user_info.get("picture"),
+            )
+        finally:
+            db.close()
+        scheduler.add_job(scan_one_account, args=[email], id=f"onboard:{email}",
+                          replace_existing=True)
+
     return RedirectResponse("/")
+
+
+@app.post("/job/{job_id}/edit")
+async def edit_job(
+    job_id: int,
+    request: Request,
+    job_title: str = Form(""),
+    status: str = Form(""),
+):
+    """Manually edit a job's title/status. Recorded as a manual entry in the
+    job's email timeline; a later real email can still override the status."""
+    user = request.session.get("user")
+    if not user:
+        return RedirectResponse("/auth/login", status_code=303)
+
+    db = SessionLocal()
+    try:
+        job = (
+            db.query(JobApplication)
+            .filter(JobApplication.id == job_id, JobApplication.user_email == user["email"])
+            .first()
+        )
+        if job is None:
+            return RedirectResponse("/jobs", status_code=303)
+
+        old_title, old_status = job.job_title, job.status
+        new_title = job_title.strip() or job.job_title
+        new_status = status.strip() or job.status
+        job.job_title = new_title
+        job.status = new_status
+        job.updated_at = datetime.utcnow()
+
+        changes = []
+        if new_status != old_status:
+            changes.append(f"status to {new_status}")
+        if new_title != old_title:
+            changes.append(f"role to {new_title}")
+        summary = (
+            "You updated the " + " and ".join(changes) + "."
+            if changes else "You saved the details."
+        )
+
+        db.add(JobEmail(
+            job_id=job.id,
+            user_email=user["email"],
+            email_id=f"manual-{job.id}-{secrets.token_hex(6)}",
+            message_ref="",
+            subject="Manual update",
+            paraphrase=summary,
+            received_at=datetime.utcnow(),
+        ))
+        db.commit()
+        scan_status.bump_revision()
+    finally:
+        db.close()
+
+    return RedirectResponse("/jobs", status_code=303)
+
+
+@app.get("/scan-status")
+async def scan_status_endpoint():
+    """Current background-parser activity, polled by the dashboard."""
+    return JSONResponse(scan_status.get_status())
 
 
 @app.get("/auth/logout")
@@ -202,140 +299,88 @@ async def logout(request: Request):
     return RedirectResponse("/")
 
 
+@app.post("/reset")
+async def reset(request: Request):
+    """Wipe this user's parsed data + dedup ledger and reparse the inbox from scratch."""
+    user = request.session.get("user")
+    if not user:
+        return RedirectResponse("/auth/login", status_code=303)
+
+    email = user["email"]
+    db = SessionLocal()
+    try:
+        db.query(JobEmail).filter(JobEmail.user_email == email).delete()
+        db.query(JobApplication).filter(JobApplication.user_email == email).delete()
+        db.query(ProcessedEmail).filter(ProcessedEmail.user_email == email).delete()
+
+        account = db.query(UserAccount).filter(UserAccount.email == email).first()
+        can_rescan = bool(account and account.refresh_token)
+        if account:
+            account.last_scanned_at = None  # force a full 30-day re-onboard
+        db.commit()
+    finally:
+        db.close()
+
+    # Reparse in the background so the redirect returns immediately.
+    if can_rescan:
+        scheduler.add_job(scan_one_account, args=[email], id=f"reset:{email}",
+                          replace_existing=True)
+
+    return RedirectResponse("/jobs", status_code=303)
+
+
 @app.get("/jobs", response_class=HTMLResponse)
 async def jobs(request: Request):
+    """Render stored job applications. Pure DB read — scanning happens in the
+    background job, never in the request path."""
     user = request.session.get("user")
-    creds_data = request.session.get("credentials")
-
     if not user:
         return RedirectResponse("/auth/login")
 
-    jobs_list = []
-
-    # Scan inbox and classify each email.
-    if creds_data:
-        credentials = _credentials_from_session(creds_data)
-
-        # Refresh if expired
-        if credentials.expired and credentials.refresh_token:
-            try:
-                credentials.refresh(GoogleRequest())
-                request.session["credentials"]["token"] = credentials.token
-            except Exception:
-                request.session.clear()
-                return RedirectResponse("/auth/login")
-
-        service = build("gmail", "v1", credentials=credentials)
-
-        try:
-            results = (
-                service.users()
-                .messages()
-                .list(userId="me", maxResults=50, labelIds=["INBOX"])
-                .execute()
+    db = SessionLocal()
+    try:
+        saved_jobs = (
+            db.query(JobApplication)
+            .filter(JobApplication.user_email == user["email"])
+            .order_by(JobApplication.updated_at.desc())
+            .all()
+        )
+        jobs_list = []
+        for job in saved_jobs:
+            emails = (
+                db.query(JobEmail)
+                .filter(JobEmail.job_id == job.id)
+                .order_by(JobEmail.received_at.desc())
+                .all()
             )
-
-            messages = results.get("messages", [])
-            db = SessionLocal()
-            try:
-                for msg in messages:
-                    detail = (
-                        service.users()
-                        .messages()
-                        .get(
-                            userId="me",
-                            id=msg["id"],
-                            format="full",
-                        )
-                        .execute()
-                    )
-                    raw_headers = detail.get("payload", {}).get("headers", [])
-                    headers = {h.get("name", ""): h.get("value", "") for h in raw_headers}
-                    subject = headers.get("Subject", "(no subject)")
-                    from_email = headers.get("From", "")
-                    date = headers.get("Date", "")
-                    snippet = detail.get("snippet", "")
-                    body = _extract_email_body(detail.get("payload", {})) or snippet
-
-                    email_context = {
-                        "message_id": detail.get("id", ""),
-                        "thread_id": detail.get("threadId", ""),
-                        "internal_date": detail.get("internalDate", ""),
-                        "label_ids": detail.get("labelIds", []),
-                        "snippet": snippet,
-                        "headers": headers,
-                        "from": from_email,
-                        "to": headers.get("To", ""),
-                        "cc": headers.get("Cc", ""),
-                        "reply_to": headers.get("Reply-To", ""),
-                        "subject": subject,
-                        "date": date,
-                        "body": body,
-                        "mime_type": detail.get("payload", {}).get("mimeType", ""),
-                    }
-
-                    analysis = analyze_job_application_with_gemini(email_context)
-                    if not bool(analysis.get("is_job_application", False)):
-                        continue
-
-                    parsed = {
-                        "company": analysis.get("company") or _fallback_company(from_email),
-                        "job_title": analysis.get("job_title") or "Unknown Role",
-                        "status": analysis.get("status") or "Other",
-                        "applied_date": analysis.get("applied_date"),
-                    }
-
-                    existing = db.query(JobApplication).filter(
-                        JobApplication.email_id == msg["id"],
-                        JobApplication.user_email == user["email"],
-                    ).first()
-
-                    if existing:
-                        existing.company = parsed.get("company") or existing.company
-                        existing.job_title = parsed.get("job_title") or existing.job_title
-                        existing.status = parsed.get("status") or existing.status
-                        existing.email_subject = subject
-                        existing.email_body = body
-                        if parsed.get("applied_date"):
-                            existing.applied_date = parsed.get("applied_date")
-                    else:
-                        db.add(
-                            JobApplication(
-                                user_email=user["email"],
-                                company=parsed.get("company", "Unknown Company"),
-                                job_title=parsed.get("job_title", "Job Application"),
-                                status=parsed.get("status", "Awaiting Response"),
-                                email_id=msg["id"],
-                                email_subject=subject,
-                                email_body=body,
-                                applied_date=parsed.get("applied_date"),
-                            )
-                        )
-
-                db.commit()
-
-                saved_jobs = db.query(JobApplication).filter(
-                    JobApplication.user_email == user["email"]
-                ).order_by(JobApplication.created_at.desc()).all()
-
-                jobs_list = [
+            jobs_list.append({
+                "id": job.id,
+                "company": job.company,
+                "job_title": job.job_title,
+                "status": job.status,
+                "date": (job.applied_date or job.created_at).strftime("%Y-%m-%d")
+                if (job.applied_date or job.created_at)
+                else "",
+                "emails": [
                     {
-                        "company": job.company,
-                        "job_title": job.job_title,
-                        "status": job.status,
-                        "date": (job.applied_date or job.created_at).strftime("%Y-%m-%d")
-                        if (job.applied_date or job.created_at)
-                        else "",
+                        "subject": e.subject or "(no subject)",
+                        "paraphrase": e.paraphrase or "",
+                        "date": e.received_at.strftime("%Y-%m-%d") if e.received_at else "",
+                        "mail_url": _mail_url(e.message_ref),
                     }
-                    for job in saved_jobs
-                ]
-            finally:
-                db.close()
-        except Exception as e:
-            print(f"Error scanning emails: {e}")
+                    for e in emails
+                ],
+            })
+    finally:
+        db.close()
 
     return templates.TemplateResponse(
         request=request,
         name="jobs.html",
-        context={"request": request, "user": user, "jobs": jobs_list},
+        context={
+            "request": request,
+            "user": user,
+            "jobs": jobs_list,
+            "scan_revision": scan_status.get_status().get("revision", 0),
+        },
     )

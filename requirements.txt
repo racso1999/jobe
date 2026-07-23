@@ -7,5 +7,7 @@ google-api-python-client
 itsdangerous
 jinja2
 sqlalchemy
-google-generativeai
+anthropic
+apscheduler
+python-multipart
 
