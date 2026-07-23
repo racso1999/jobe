@@ -127,12 +127,19 @@
       background: var(--chip-bg); border: 1px solid var(--outline); border-radius: 6px;
       padding: 8px 10px; width: 100%; max-width: 380px; height: 38px;
     }
+    .edit-actions { display: flex; align-items: center; gap: 16px; }
     .save-btn {
       font-family: inherit; font-size: .85rem; font-weight: 600; cursor: pointer;
       color: #ffffff; background: var(--st-interview); border: none; border-radius: 6px;
-      padding: 8px 18px; align-self: flex-start; transition: opacity .15s ease;
+      padding: 8px 18px; transition: opacity .15s ease;
     }
     .save-btn:hover { opacity: .88; }
+    .hide-btn {
+      font-family: inherit; font-size: .85rem; font-weight: 600; cursor: pointer;
+      color: var(--st-rejected); background: none; border: none; padding: 8px 4px;
+      transition: opacity .15s ease;
+    }
+    .hide-btn:hover { opacity: .75; }
     .company-col { font-weight: 600; color: var(--text); }
     .title-col { color: var(--text-soft); }
     .bell { display: inline-flex; margin-left: 6px; color: #eab308; vertical-align: -2px; }
@@ -234,6 +241,8 @@
                 </div>
                 <div class="edit-actions">
                   <button type="submit" class="save-btn">Save</button>
+                  <button type="submit" class="hide-btn" formaction="/job/{{ job.id }}/hide" formnovalidate
+                          onclick="return confirm('This application and any future related emails will be hidden from your dashboard. Continue?');">Don't show these emails</button>
                 </div>
               </form>
             </div>

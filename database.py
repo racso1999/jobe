@@ -29,6 +29,7 @@ class JobApplication(Base):
     email_body = Column(Text, nullable=True)
     applied_date = Column(DateTime, nullable=True)
     unread = Column(Boolean, default=False)  # new email / status change not yet viewed
+    ignored = Column(Boolean, default=False)  # user hid this application from the dashboard
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

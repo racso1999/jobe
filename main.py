@@ -288,6 +288,28 @@ async def edit_job(
     return RedirectResponse("/jobs", status_code=303)
 
 
+@app.post("/job/{job_id}/hide")
+async def hide_job(job_id: int, request: Request):
+    """Hide an application from the dashboard; future related emails stay hidden too."""
+    user = request.session.get("user")
+    if not user:
+        return RedirectResponse("/auth/login", status_code=303)
+    db = SessionLocal()
+    try:
+        job = (
+            db.query(JobApplication)
+            .filter(JobApplication.id == job_id, JobApplication.user_email == user["email"])
+            .first()
+        )
+        if job is not None:
+            job.ignored = True
+            db.commit()
+            scan_status.bump_revision()
+    finally:
+        db.close()
+    return RedirectResponse("/jobs", status_code=303)
+
+
 @app.post("/job/{job_id}/seen")
 async def mark_seen(job_id: int, request: Request):
     """Clear a job's unread flag once the user opens it (removes the bell)."""
@@ -363,7 +385,10 @@ async def jobs(request: Request):
     try:
         saved_jobs = (
             db.query(JobApplication)
-            .filter(JobApplication.user_email == user["email"])
+            .filter(
+                JobApplication.user_email == user["email"],
+                JobApplication.ignored.isnot(True),
+            )
             .order_by(JobApplication.updated_at.desc())
             .all()
         )
