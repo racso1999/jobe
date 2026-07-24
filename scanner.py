@@ -90,9 +90,22 @@ def _fallback_company(from_email: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Interchangeable role words collapse to one token so e.g. "Software Developer"
+# and "Software Engineer" are recognised as the same role.
+_ROLE_SYNONYMS = {
+    "developer": "engineer",
+    "dev": "engineer",
+    "programmer": "engineer",
+    "coder": "engineer",
+    "swe": "engineer",
+    "sde": "engineer",
+}
+
+
 def _title_tokens(title: str) -> set:
-    """Lowercased word tokens of a job title (punctuation stripped)."""
-    return set(re.findall(r"[a-z0-9]+", (title or "").lower()))
+    """Lowercased word tokens of a job title, with role-word synonyms collapsed."""
+    tokens = re.findall(r"[a-z0-9]+", (title or "").lower())
+    return {_ROLE_SYNONYMS.get(t, t) for t in tokens}
 
 
 def _title_coverage(a: str, b: str) -> float:
