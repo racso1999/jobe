@@ -1,0 +1,8 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+.env
+jobe.db
+.DS_Store
+.claude/
