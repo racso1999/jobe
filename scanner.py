@@ -116,9 +116,11 @@ def _title_coverage(a: str, b: str) -> float:
     return len(ta & tb) / min(len(ta), len(tb))
 
 
-def _find_matching_job(db: Session, user_email: str, company: str, job_title: str):
+def _find_matching_job(db: Session, user_email: str, company: str, job_title: str,
+                       exclude_id: int | None = None):
     """Existing job for the same company whose title best covers `job_title`
-    at >= TITLE_MATCH_THRESHOLD, else None (=> new row)."""
+    at >= TITLE_MATCH_THRESHOLD, else None (=> new row). `exclude_id` skips a
+    row (used when a manual edit shouldn't match itself)."""
     candidates = (
         db.query(JobApplication)
         .filter(
@@ -129,6 +131,8 @@ def _find_matching_job(db: Session, user_email: str, company: str, job_title: st
     )
     best, best_score = None, 0.0
     for job in candidates:
+        if exclude_id is not None and job.id == exclude_id:
+            continue
         score = _title_coverage(job.job_title, job_title)
         if score > best_score:
             best, best_score = job, score

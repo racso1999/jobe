@@ -17,7 +17,7 @@ from database import (
     init_db, SessionLocal, JobApplication, JobEmail, ProcessedEmail,
     UserAccount, upsert_account,
 )
-from scanner import scan_account
+from scanner import scan_account, _find_matching_job
 import scan_status
 
 load_dotenv()
@@ -258,28 +258,49 @@ async def edit_job(
         new_status = status.strip() or job.status
         job.job_title = new_title
         job.status = new_status
-        job.updated_at = datetime.utcnow()
-        job.unread = False  # user made this change, so it's already "seen"
 
-        changes = []
-        if new_status != old_status:
-            changes.append(f"status to {new_status}")
-        if new_title != old_title:
-            changes.append(f"role to {new_title}")
-        summary = (
-            "You updated the " + " and ".join(changes) + "."
-            if changes else "You saved the details."
-        )
-
-        db.add(JobEmail(
-            job_id=job.id,
-            user_email=user["email"],
-            email_id=f"manual-{job.id}-{secrets.token_hex(6)}",
-            message_ref="",
-            subject="Manual update",
-            paraphrase=summary,
-            received_at=datetime.utcnow(),
-        ))
+        # If the new title now matches another application for this company,
+        # merge this row into it instead of leaving a duplicate.
+        target = _find_matching_job(db, user["email"], job.company, new_title, exclude_id=job.id)
+        if target is not None:
+            db.query(JobEmail).filter(JobEmail.job_id == job.id).update(
+                {JobEmail.job_id: target.id}, synchronize_session=False
+            )
+            if new_status != old_status:  # only carry status over if the user changed it
+                target.status = new_status
+            target.updated_at = datetime.utcnow()
+            target.unread = False
+            db.add(JobEmail(
+                job_id=target.id,
+                user_email=user["email"],
+                email_id=f"manual-{target.id}-{secrets.token_hex(6)}",
+                message_ref="",
+                subject="Manual update",
+                paraphrase="Merged a duplicate entry into this application.",
+                received_at=datetime.utcnow(),
+            ))
+            db.delete(job)
+        else:
+            job.updated_at = datetime.utcnow()
+            job.unread = False  # user made this change, so it's already "seen"
+            changes = []
+            if new_status != old_status:
+                changes.append(f"status to {new_status}")
+            if new_title != old_title:
+                changes.append(f"role to {new_title}")
+            summary = (
+                "You updated the " + " and ".join(changes) + "."
+                if changes else "You saved the details."
+            )
+            db.add(JobEmail(
+                job_id=job.id,
+                user_email=user["email"],
+                email_id=f"manual-{job.id}-{secrets.token_hex(6)}",
+                message_ref="",
+                subject="Manual update",
+                paraphrase=summary,
+                received_at=datetime.utcnow(),
+            ))
         db.commit()
         scan_status.bump_revision()
     finally:
